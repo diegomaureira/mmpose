@@ -21,6 +21,7 @@ def visualize(
     skeleton_style: str = 'mmpose',
     show: bool = False,
     kpt_thr: float = 0.3,
+    draw_gt: bool = False,
 ):
     """Visualize 2d keypoints on an image.
 
@@ -77,6 +78,7 @@ def visualize(
         skeleton_style=skeleton_style,
         show=show,
         wait_time=0,
-        kpt_thr=kpt_thr)
+        kpt_thr=kpt_thr,
+        draw_gt=draw_gt)
 
     return visualizer.get_image()

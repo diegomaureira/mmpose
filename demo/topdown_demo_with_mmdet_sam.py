@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import time
+import matplotlib.pyplot as plt
 from argparse import ArgumentParser
 
 import cv2
@@ -25,16 +26,36 @@ try:
 except (ImportError, ModuleNotFoundError):
     has_mmdet = False
 
-# Function to check if a point is inside a polygon
-def point_in_quad(pt, quad):
-    return cv2.pointPolygonTest(np.array(quad, dtype=np.int32), (int(pt[0]), int(pt[1])), False) >= 0
+from segment_anything import SamPredictor, sam_model_registry
+
+def show_mask(mask, ax, random_color=False):
+    if random_color:
+        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    else:
+        color = np.array([30/255, 144/255, 255/255, 0.6])
+    h, w = mask.shape[-2:]
+    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    ax.imshow(mask_image)
+    
+def show_points(coords, labels, ax, marker_size=375):
+    pos_points = coords[labels==1]
+    neg_points = coords[labels==0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
+    
+def show_box(box, ax):
+    x0, y0 = box[0], box[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
+
 
 def process_one_image(args,
                       img,
                       detector,
                       pose_estimator,
                       visualizer=None,
-                      show_interval=0):
+                      show_interval=0,
+                      mask_generator=None):
     """Visualize predicted keypoints (and heatmaps) of one image."""
 
     # predict bbox
@@ -46,13 +67,6 @@ def process_one_image(args,
                                    pred_instance.scores > args.bbox_thr)]
     bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
 
-    # get masks associated with current bboxes
-    masks = np.zeros((bboxes.shape[0], img.shape[0], img.shape[1]),
-                        dtype=np.uint8)
-    for i in range(bboxes.shape[0]):
-        mask = pred_instance.masks[i]
-        masks[i] = mask
-
     # predict keypoints
     pose_results = inference_topdown(pose_estimator, img, bboxes)
     data_samples = merge_data_samples(pose_results)
@@ -63,64 +77,30 @@ def process_one_image(args,
     elif isinstance(img, np.ndarray):
         img = mmcv.bgr2rgb(img)
 
-    # put the masks into img with transparency
-    # Key Points are data_samples.key_points
-        # Left Shoulder is 5
-        # Right Shoulder is 6
-        # Left Hip is 11
-        # Right Hip is 12
-    
-    kp = data_samples.pred_instances.keypoints[0]
-
-    # Assume kp, img, masks are defined as before
-    p1 = kp[3]   # Left Shoulder
-    p2 = kp[4]   # Right Shoulder
-    p3 = kp[5]  # Right Hip
-    p4 = kp[6]  # Left Hip
-
-    h, w = img.shape[:2]
-
-    # Get line equations: y = m*x + b
-    def line_y(x, pt1, pt2):
-        # Handle vertical lines
-        if pt2[0] == pt1[0]:
-            return np.full_like(x, min(pt1[1], pt2[1]))
-        m = (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
-        b = pt1[1] - m * pt1[0]
-        return m * x + b
-
-    x_coords = np.arange(w)
-
-    # Shoulders (top)
-    y_top = line_y(x_coords, p1, p2)
-    # Hips (bottom)
-    y_bottom = line_y(x_coords, p4, p3)  # Note: p4 is left hip, p3 is right hip
-
-    # Create a mask for all pixels between the lines
-    Y, X = np.ogrid[:h, :w]
-    between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X])
-
-    if masks is not None:
-        for i in range(masks.shape[0]):
-            mask = masks[i]  # shape: (H, W)
-            # Keep only the part of the mask between the lines
-            filtered_mask = mask & between_mask
-
-            # Prepare for blending
-            filtered_mask_expanded = np.expand_dims(filtered_mask, axis=-1)
-
-            # Blend: apply transparency only inside the region
-            img = np.where(
-                filtered_mask_expanded == 0,
-                img,
-                img * 0.5 + 0.5 * 255
-            ).astype(np.uint8)
-
-    # if masks is not None:
-    #     for i in range(masks.shape[0]):
-    #         mask = masks[i]
-    #         mask = np.expand_dims(mask, axis=-1)
-    #         img = np.where(mask == 0, img, img * 0.5 + 0.5 * 255)
+    if mask_generator is not None:
+        mask_generator.set_image(img)
+        input_points = data_samples.pred_instances.get('keypoints')[0]
+        print(input_points.shape)
+        # select index 5, 6, 11 and 12 as 1 and others as 0
+        input_labels = np.zeros(input_points.shape[0])
+        input_labels[5] = 1
+        input_labels[6] = 1
+        input_labels[11] = 1
+        input_labels[12] = 1
+        masks, scores, logits = mask_generator.predict(
+            point_coords=input_points,
+            point_labels=input_labels,
+            multimask_output=False,
+        )
+        for i, (mask, score) in enumerate(zip(masks, scores)):
+            plt.figure(figsize=(10,10))
+            plt.imshow(img)
+            show_mask(mask, plt.gca())
+            show_points(input_points, input_labels, plt.gca())
+            plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+            plt.axis('off')
+            plt.savefig(f"mask_{i+1}.png", bbox_inches='tight')
+            plt.close()
 
     if visualizer is not None:
         visualizer.add_datasample(
@@ -244,14 +224,17 @@ def main():
         assert args.output_root != ''
         args.pred_save_path = f'{args.output_root}/results_' \
             f'{os.path.splitext(os.path.basename(args.input))[0]}.json'
+        
+    # build semantic sam
+    sam = sam_model_registry["vit_b"](checkpoint="../weights/sam_vit_b_01ec64.pth")
+    sam.to(args.device)
+    predictor = SamPredictor(sam)
+
+    os.chdir('/home/diego/workspace/TestLab/mmpose/')
 
     # build detector
     detector = init_detector(
-        #'/home/diego/workspace/TestLab/mmpose/checkpoints/mask-rcnn_r50-caffe_fpn_ms-poly-3x_coco.py',#
-        args.det_config, 
-        #'/home/diego/workspace/TestLab/mmpose/checkpoints/mask_rcnn_r50_caffe_fpn_mstrain-poly_3x_coco_bbox_mAP-0.408__segm_mAP-0.37_20200504_163245-42aa3d00.pth',#
-        args.det_checkpoint, 
-        device=args.device)
+        args.det_config, args.det_checkpoint, device=args.device)
     detector.cfg = adapt_mmdet_pipeline(detector.cfg)
 
     # build pose estimator
@@ -281,7 +264,7 @@ def main():
 
         # inference
         pred_instances = process_one_image(args, args.input, detector,
-                                           pose_estimator, visualizer)
+                                           pose_estimator, visualizer, mask_generator = predictor)
 
         if args.save_predictions:
             pred_instances_list = split_instances(pred_instances)
@@ -311,7 +294,8 @@ def main():
             # topdown pose estimation
             pred_instances = process_one_image(args, frame, detector,
                                                pose_estimator, visualizer,
-                                               0.001)
+                                               0.001, mask_generator = predictor)
+            break
 
             if args.save_predictions:
                 # save prediction results
