@@ -73,10 +73,10 @@ def process_one_image(args,
     kp = data_samples.pred_instances.keypoints[0]
 
     # Assume kp, img, masks are defined as before
-    p1 = kp[3]   # Left Shoulder
-    p2 = kp[4]   # Right Shoulder
-    p3 = kp[5]  # Right Hip
-    p4 = kp[6]  # Left Hip
+    p1 = kp[5]   # Left Shoulder
+    p2 = kp[6]   # Right Shoulder
+    p3 = kp[11]  # Left Hip
+    p4 = kp[12]  # Right Hip
 
     h, w = img.shape[:2]
 
@@ -89,16 +89,84 @@ def process_one_image(args,
         b = pt1[1] - m * pt1[0]
         return m * x + b
 
+    def get_perpendicular_line_y(x, pt1, pt2):
+        # Handle vertical lines
+        if pt2[0] == pt1[0]:
+            return np.full_like(x, pt1[1])
+        m = (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
+        m_perpendicular = -1 / m
+        b = pt1[1] - m_perpendicular * pt1[0]
+        return m_perpendicular, b, m_perpendicular * x + b
+
     x_coords = np.arange(w)
 
-    # Shoulders (top)
-    y_top = line_y(x_coords, p1, p2)
-    # Hips (bottom)
-    y_bottom = line_y(x_coords, p4, p3)  # Note: p4 is left hip, p3 is right hip
+    # Function to compute perpendicular line through a point and reference segment
+    def get_perpendicular_line_through(p_base, p_ref):
+        dx = p_ref[0] - p_base[0]
+        dy = p_ref[1] - p_base[1]
+
+        if dx == 0:  # vertical segment, perpendicular is horizontal
+            m_perp = 0
+            b = p_base[1]
+            y_vals = np.full_like(x_coords, b)
+        elif dy == 0:  # horizontal segment, perpendicular is vertical (x constant)
+            m_perp = np.inf
+            b = p_base[0]
+            y_vals = None  # special case
+        else:
+            m = dy / dx
+            m_perp = -1 / m
+            b = p_base[1] - m_perp * p_base[0]
+            y_vals = m_perp * x_coords + b
+
+        return y_vals, (m_perp, b)
+
+    # Get perpendicular lines through p1→p3 and p2→p4
+    y_left, (m_left, b_left) = get_perpendicular_line_through(p1, p3)
+    y_right, (m_right, b_right) = get_perpendicular_line_through(p2, p4)
+
+    mean_m = (m_left + m_right) / 2
+    mean_top_point = (p1 + p2) / 2
+    mean_bottom_point = (p3 + p4) / 2
+    y_right = mean_m * x_coords + (mean_top_point[1] - mean_m * mean_top_point[0])
+    y_left = mean_m * x_coords + (mean_bottom_point[1] - mean_m * mean_bottom_point[0])
+
+    # Initialize drawing image
+    img = img.copy()
+
+    # Handle left side
+    if y_left is None:
+        y_l = np.arange(h)
+        x_l = np.full_like(y_l, int(b_left))
+    else:
+        x_l = x_coords.astype(int)
+        y_l = y_left.astype(int)
+
+    # Handle right side
+    if y_right is None:
+        y_r = np.arange(h)
+        x_r = np.full_like(y_r, int(b_right))
+    else:
+        x_r = x_coords.astype(int)
+        y_r = y_right.astype(int)
+
+    # Draw left perpendicular line (red)
+    for x, y in zip(x_l, y_l):
+        if 0 <= x < w and 0 <= y < h:
+            cv2.circle(img, (x, y), 1, (0, 0, 255), -1)
+
+    # Draw right perpendicular line (green)
+    for x, y in zip(x_r, y_r):
+        if 0 <= x < w and 0 <= y < h:
+            cv2.circle(img, (x, y), 1, (0, 255, 0), -1)
+
+    # Optionally: draw the original body lines for reference
+    cv2.line(img, tuple(p1.astype(int)), tuple(p3.astype(int)), (255, 0, 0), 2)  # Left (blue)
+    cv2.line(img, tuple(p2.astype(int)), tuple(p4.astype(int)), (255, 255, 0), 2)  # Right (cyan)
 
     # Create a mask for all pixels between the lines
     Y, X = np.ogrid[:h, :w]
-    between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X])
+    between_mask = (Y >= y_right[X]) & (Y <= y_left[X])
 
     if masks is not None:
         for i in range(masks.shape[0]):
@@ -115,12 +183,6 @@ def process_one_image(args,
                 img,
                 img * 0.5 + 0.5 * 255
             ).astype(np.uint8)
-
-    # if masks is not None:
-    #     for i in range(masks.shape[0]):
-    #         mask = masks[i]
-    #         mask = np.expand_dims(mask, axis=-1)
-    #         img = np.where(mask == 0, img, img * 0.5 + 0.5 * 255)
 
     if visualizer is not None:
         visualizer.add_datasample(
