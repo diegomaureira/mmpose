@@ -29,6 +29,36 @@ except (ImportError, ModuleNotFoundError):
 def point_in_quad(pt, quad):
     return cv2.pointPolygonTest(np.array(quad, dtype=np.int32), (int(pt[0]), int(pt[1])), False) >= 0
 
+# Function to compute perpendicular line through a point and reference segment
+def get_perpendicular_line_through(x_coords, p_base, p_ref):
+    dx = p_ref[0] - p_base[0]
+    dy = p_ref[1] - p_base[1]
+
+    if dx == 0:  # vertical segment, perpendicular is horizontal
+        m_perp = 0
+        b = p_base[1]
+        y_vals = np.full_like(x_coords, b)
+    elif dy == 0:  # horizontal segment, perpendicular is vertical (x constant)
+        m_perp = np.inf
+        b = p_base[0]
+        y_vals = None  # special case
+    else:
+        m = dy / dx
+        m_perp = -1 / m
+        b = p_base[1] - m_perp * p_base[0]
+        y_vals = m_perp * x_coords + b
+
+    return y_vals, (m_perp, b)
+
+def calculate_curvature(back_points):
+    # Calculate the area of the back
+    back_area = cv2.contourArea(back_points)
+    # Calculate the perimeter of the back
+    back_perimeter = cv2.arcLength(back_points, True)
+    # Calculate the curvature
+    back_curvature = back_perimeter / (2 * np.pi * np.sqrt(back_area))
+    return back_curvature
+
 def process_one_image(args,
                       img,
                       detector,
@@ -69,113 +99,122 @@ def process_one_image(args,
         # Right Shoulder is 6
         # Left Hip is 11
         # Right Hip is 12
-    
+    #print(data_samples.pred_instances)
+
     kp = data_samples.pred_instances.keypoints[0]
 
+    vis = data_samples.pred_instances.keypoints_visible[0]
+
     # Assume kp, img, masks are defined as before
-    p1 = kp[5]   # Left Shoulder
-    p2 = kp[6]   # Right Shoulder
-    p3 = kp[11]  # Left Hip
-    p4 = kp[12]  # Right Hip
+    p1, v1 = kp[5], vis[5]  # Left Shoulder
+    nose, nos_vis = kp[0], vis[0]  # Nose
+    left_eye, left_eye_vis = kp[1], vis[1]  # Left Eye
+    right_eye, right_eye_vis = kp[2], vis[2]  # Right Eye
+    p2, v2 = kp[6], vis[6]  # Right Shoulder
+    p3, v3 = kp[11], vis[11]  # Left Hip
+    p4, v4 = kp[12], vis[12]  # Right Hip
 
+    if v1 <= 0.5 and v3 <= 0.5:
+        view = 'right'
+    elif v2 <= 0.5 and v4 <= 0.5:
+        view = 'left'
+    else:
+        view = 'front'
+        
     h, w = img.shape[:2]
-
-    # Get line equations: y = m*x + b
-    def line_y(x, pt1, pt2):
-        # Handle vertical lines
-        if pt2[0] == pt1[0]:
-            return np.full_like(x, min(pt1[1], pt2[1]))
-        m = (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
-        b = pt1[1] - m * pt1[0]
-        return m * x + b
-
-    def get_perpendicular_line_y(x, pt1, pt2):
-        # Handle vertical lines
-        if pt2[0] == pt1[0]:
-            return np.full_like(x, pt1[1])
-        m = (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
-        m_perpendicular = -1 / m
-        b = pt1[1] - m_perpendicular * pt1[0]
-        return m_perpendicular, b, m_perpendicular * x + b
 
     x_coords = np.arange(w)
 
-    # Function to compute perpendicular line through a point and reference segment
-    def get_perpendicular_line_through(p_base, p_ref):
-        dx = p_ref[0] - p_base[0]
-        dy = p_ref[1] - p_base[1]
-
-        if dx == 0:  # vertical segment, perpendicular is horizontal
-            m_perp = 0
-            b = p_base[1]
-            y_vals = np.full_like(x_coords, b)
-        elif dy == 0:  # horizontal segment, perpendicular is vertical (x constant)
-            m_perp = np.inf
-            b = p_base[0]
-            y_vals = None  # special case
-        else:
-            m = dy / dx
-            m_perp = -1 / m
-            b = p_base[1] - m_perp * p_base[0]
-            y_vals = m_perp * x_coords + b
-
-        return y_vals, (m_perp, b)
-
-    # Get perpendicular lines through p1→p3 and p2→p4
-    y_left, (m_left, b_left) = get_perpendicular_line_through(p1, p3)
-    y_right, (m_right, b_right) = get_perpendicular_line_through(p2, p4)
-
-    mean_m = (m_left + m_right) / 2
-    mean_top_point = (p1 + p2) / 2
-    dif_x_top = np.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
-    dif_x_bottom = np.sqrt((p3[0]-p4[0])**2 + (p3[1]-p4[1])**2)
-    print(dif_x_top, dif_x_bottom)
-    mean_bottom_point = (p3 + p4) / 2
-    y_right = mean_m * x_coords + (mean_top_point[1] - mean_m * mean_top_point[0])
-    y_left = mean_m * x_coords + (mean_bottom_point[1] - mean_m * mean_bottom_point[0])
-
-    # Initialize drawing image
-    img = img.copy()
-
-    # Handle left side
-    if y_left is None:
-        y_l = np.arange(h)
-        x_l = np.full_like(y_l, int(b_left))
+    if view == 'right':
+        y_right, (m_right, b_right) = get_perpendicular_line_through(x_coords, p2, p4)
+        y_top = m_right * x_coords + (p2[1] - m_right * p2[0])
+        y_bottom = m_right * x_coords + (p4[1] - m_right * p4[0])
+        # line between p2 and p4
+        m_vertical = (p4[1] - p2[1]) / (p4[0] - p2[0])
+        b_vertical = p2[1] - m_vertical * p2[0]
+        y_vertical = m_vertical * x_coords + b_vertical
+    elif view == 'left':
+        y_left, (m_left, b_left) = get_perpendicular_line_through(x_coords, p1, p3)
+        y_top = m_left * x_coords + (p1[1] - m_left * p1[0])
+        y_bottom = m_left * x_coords + (p3[1] - m_left * p3[0])
+        # line between p1 and p3
+        m_vertical = (p3[1] - p1[1]) / (p3[0] - p1[0])
+        b_vertical = p1[1] - m_vertical * p1[0]
+        y_vertical = m_vertical * x_coords + b_vertical
     else:
-        x_l = x_coords.astype(int)
-        y_l = y_left.astype(int)
+        # Get perpendicular lines through p1→p3 and p2→p4
+        y_left, (m_left, b_left) = get_perpendicular_line_through(x_coords, p1, p3)
+        y_right, (m_right, b_right) = get_perpendicular_line_through(x_coords, p2, p4)
 
-    # Handle right side
-    if y_right is None:
-        y_r = np.arange(h)
-        x_r = np.full_like(y_r, int(b_right))
-    else:
-        x_r = x_coords.astype(int)
-        y_r = y_right.astype(int)
-
-    # Draw left perpendicular line (red)
-    for x, y in zip(x_l, y_l):
-        if 0 <= x < w and 0 <= y < h:
-            cv2.circle(img, (x, y), 1, (0, 0, 255), -1)
-
-    # Draw right perpendicular line (green)
-    for x, y in zip(x_r, y_r):
-        if 0 <= x < w and 0 <= y < h:
-            cv2.circle(img, (x, y), 1, (0, 255, 0), -1)
-
-    # Optionally: draw the original body lines for reference
-    #cv2.line(img, tuple(p1.astype(int)), tuple(p3.astype(int)), (255, 0, 0), 2)  # Left (blue)
-    #cv2.line(img, tuple(p2.astype(int)), tuple(p4.astype(int)), (255, 255, 0), 2)  # Right (cyan)
+        mean_m = (m_left + m_right) / 2
+        mean_top_point = (p1 + p2) / 2
+        mean_bottom_point = (p3 + p4) / 2
+        # line between p1 and p3
+        m_vertical = (p3[1] - p1[1]) / (p3[0] - p1[0])
+        b_vertical = p1[1] - m_vertical * p1[0]
+        y_vertical = m_vertical * x_coords + b_vertical
+        y_top = mean_m * x_coords + (mean_top_point[1] - mean_m * mean_top_point[0])
+        y_bottom = mean_m * x_coords + (mean_bottom_point[1] - mean_m * mean_bottom_point[0])
 
     # Create a mask for all pixels between the lines
     Y, X = np.ogrid[:h, :w]
-    between_mask = (Y >= y_right[X]) & (Y <= y_left[X])
+    between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X]) 
+
+    if view != 'front':
+        # Check if nose point is to the left or right of the vertical line
+        if view == 'left':
+            eye_side = 'right' if int(left_eye[0]) > y_vertical[int(left_eye[0])] else 'left'   
+        elif view == 'right':
+            eye_side = 'right' if int(right_eye[0]) > y_vertical[int(right_eye[0])] else 'left'
+
+        # Select only the part of the mask on the opposite side of the nose respect to the vertical line
+        # So need to filter based on y_vertical
+        if eye_side == 'right':
+            between_mask = between_mask & (Y <= y_vertical[X])
+        else:
+            between_mask = between_mask & (Y >= y_vertical[X])
 
     if masks is not None:
         for i in range(masks.shape[0]):
             mask = masks[i]  # shape: (H, W)
             # Keep only the part of the mask between the lines
             filtered_mask = mask & between_mask
+        
+            # Find contours
+            contours, _ = cv2.findContours(filtered_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Get bigger contour and plot over img in purple
+            if len(contours) > 0:
+                max_contour = max(contours, key=cv2.contourArea)
+            
+                # Aprox contour with a polygon of 4 points
+                epsilon = 0.05 * cv2.arcLength(max_contour, True)
+                approx = cv2.approxPolyDP(max_contour, epsilon, True)
+                if len(approx) == 4:
+                
+                    if view == 'right':
+                        # Find the points corresponding to p2 and p6:
+                        shoulder = np.argmin(np.linalg.norm(approx - p2, axis=2))
+                        hip = np.argmin(np.linalg.norm(approx - p4, axis=2))
+                    elif view == 'left':
+                        shoulder = np.argmin(np.linalg.norm(approx - p1, axis=2))
+                        hip = np.argmin(np.linalg.norm(approx - p3, axis=2))
+
+                    if view != 'front':
+                        back_top, back_bottom = approx[np.delete(np.arange(4), [shoulder, hip])]
+                        # Get from max_contour the points between back_top and back_bottom
+                        back_points = max_contour[np.logical_and(max_contour[:, 0, 1] >= back_top[0, 1], max_contour[:, 0, 1] <= back_bottom[0, 1])]
+                        # Calculate curvature of back_top and back_bottom
+                        back_curvature = calculate_curvature(back_points)
+                        print(back_curvature)   
+                        # Show back curvature as text in img
+                        cv2.putText(img, f'Back Curvature: {back_curvature:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                        if back_curvature > 0.009:
+                            # Plot back points in red
+                            cv2.drawContours(img, [back_points], 0, (255, 0, 0), 2)
+                        else:
+                            # Plot back points in green
+                            cv2.drawContours(img, [back_points], 0, (0, 255, 0), 2)
 
             # Prepare for blending
             filtered_mask_expanded = np.expand_dims(filtered_mask, axis=-1)
@@ -377,6 +416,8 @@ def main():
             pred_instances = process_one_image(args, frame, detector,
                                                pose_estimator, visualizer,
                                                0.001)
+            
+            #break
 
             if args.save_predictions:
                 # save prediction results
