@@ -219,18 +219,22 @@ def process_one_image(args,
                         # Show back curvature as text in img
                         cv2.putText(img, f'Back Curvature: {back_curvature:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
                         # Plot back points as points in img
+                        if back_curvature > 5:
+                            color = (255, 0, 0)
+                        else:
+                            color = (0, 255, 0)
                         for point in back_points:
-                            cv2.circle(img, tuple(point), 2, (255, 0, 255), 2)
+                            cv2.circle(img, tuple(point), 2, color, 2)
 
             # Prepare for blending
-            filtered_mask_expanded = np.expand_dims(filtered_mask, axis=-1)
+            #filtered_mask_expanded = np.expand_dims(filtered_mask, axis=-1)
 
             # Blend: apply transparency only inside the region
-            img = np.where(
-                filtered_mask_expanded == 0,
-                img,
-                img * 0.5 + 0.5 * 255
-            ).astype(np.uint8)
+            #img = np.where(
+            #    filtered_mask_expanded == 0,
+            #    img,
+            #    img * 0.5 + 0.5 * 255
+            #).astype(np.uint8)
 
     if visualizer is not None:
         visualizer.add_datasample(
