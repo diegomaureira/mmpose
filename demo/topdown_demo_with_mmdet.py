@@ -55,8 +55,8 @@ def calculate_curvature(back_points):
     back_area = cv2.contourArea(back_points)
     # Calculate the perimeter of the back
     back_perimeter = cv2.arcLength(back_points, True)
-    # Calculate the curvature
-    back_curvature = back_perimeter / (2 * np.pi * np.sqrt(back_area))
+    # Calculate the curvature: Area / Perimeter^2
+    back_curvature = back_area / back_perimeter
     return back_curvature
 
 def process_one_image(args,
@@ -114,9 +114,9 @@ def process_one_image(args,
     p3, v3 = kp[11], vis[11]  # Left Hip
     p4, v4 = kp[12], vis[12]  # Right Hip
 
-    if v1 <= 0.5 and v3 <= 0.5:
+    if v1 <= 0.75 and v3 <= 0.75:
         view = 'right'
-    elif v2 <= 0.5 and v4 <= 0.5:
+    elif v2 <= 0.75 and v4 <= 0.75:
         view = 'left'
     else:
         view = 'front'
@@ -201,20 +201,26 @@ def process_one_image(args,
                         hip = np.argmin(np.linalg.norm(approx - p3, axis=2))
 
                     if view != 'front':
-                        back_top, back_bottom = approx[np.delete(np.arange(4), [shoulder, hip])]
+                        other_indices = np.delete(np.arange(4), [shoulder, hip])
+                        back_top = approx[other_indices[0]][0]
+                        back_bottom = approx[other_indices[1]][0]
+                        # Find points on max_contour between back_top and back_bottom
+                        contour_points = max_contour[:, 0, :]  # shape (N, 2)  
                         # Get from max_contour the points between back_top and back_bottom
-                        back_points = max_contour[np.logical_and(max_contour[:, 0, 1] >= back_top[0, 1], max_contour[:, 0, 1] <= back_bottom[0, 1])]
+                        back_bottom_arg = np.argmin(np.linalg.norm(contour_points - back_bottom, axis=1))
+                        back_top_arg = np.argmin(np.linalg.norm(contour_points - back_top, axis=1))
+                        if back_bottom_arg > back_top_arg:
+                            back_points = contour_points[back_top_arg: back_bottom_arg+1]
+                        else:
+                            back_points = np.concatenate((contour_points[back_top_arg:], contour_points[:back_bottom_arg+1]))
                         # Calculate curvature of back_top and back_bottom
                         back_curvature = calculate_curvature(back_points)
-                        print(back_curvature)   
+                        #print(back_curvature)   
                         # Show back curvature as text in img
                         cv2.putText(img, f'Back Curvature: {back_curvature:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                        if back_curvature > 0.009:
-                            # Plot back points in red
-                            cv2.drawContours(img, [back_points], 0, (255, 0, 0), 2)
-                        else:
-                            # Plot back points in green
-                            cv2.drawContours(img, [back_points], 0, (0, 255, 0), 2)
+                        # Plot back points as points in img
+                        for point in back_points:
+                            cv2.circle(img, tuple(point), 2, (255, 0, 255), 2)
 
             # Prepare for blending
             filtered_mask_expanded = np.expand_dims(filtered_mask, axis=-1)
