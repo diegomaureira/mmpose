@@ -25,10 +25,6 @@ try:
 except (ImportError, ModuleNotFoundError):
     has_mmdet = False
 
-# Function to check if a point is inside a polygon
-def point_in_quad(pt, quad):
-    return cv2.pointPolygonTest(np.array(quad, dtype=np.int32), (int(pt[0]), int(pt[1])), False) >= 0
-
 # Function to compute perpendicular line through a point and reference segment
 def get_perpendicular_line_through(x_coords, p_base, p_ref):
     dx = p_ref[0] - p_base[0]
@@ -56,8 +52,10 @@ def calculate_curvature(back_points):
     # Calculate the perimeter of the back
     back_perimeter = cv2.arcLength(back_points, True)
     # Calculate the curvature: Area / Perimeter^2
-    back_curvature = back_area / back_perimeter
-    return back_curvature
+    #back_curvature = back_area / back_perimeter
+    # Compactness
+    compactness = 4 * np.pi * back_area / (back_perimeter ** 2)
+    return compactness
 
 def process_one_image(args,
                       img,
@@ -72,16 +70,14 @@ def process_one_image(args,
     pred_instance = det_result.pred_instances.cpu().numpy()
     bboxes = np.concatenate(
         (pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
-    bboxes = bboxes[np.logical_and(pred_instance.labels == args.det_cat_id,
-                                   pred_instance.scores > args.bbox_thr)]
-    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
+    selected_indexes = np.where(np.logical_and(pred_instance.labels == args.det_cat_id,
+                                   pred_instance.scores > args.bbox_thr))[0]
+    
+    bboxes = bboxes[selected_indexes]
+    masks = pred_instance.masks[selected_indexes]
 
-    # get masks associated with current bboxes
-    masks = np.zeros((bboxes.shape[0], img.shape[0], img.shape[1]),
-                        dtype=np.uint8)
-    for i in range(bboxes.shape[0]):
-        mask = pred_instance.masks[i]
-        masks[i] = mask
+    masks = masks[nms(bboxes, args.nms_thr)]
+    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
 
     # predict keypoints
     pose_results = inference_topdown(pose_estimator, img, bboxes)
@@ -93,31 +89,39 @@ def process_one_image(args,
     elif isinstance(img, np.ndarray):
         img = mmcv.bgr2rgb(img)
 
-    # put the masks into img with transparency
-    # Key Points are data_samples.key_points
-        # Left Shoulder is 5
-        # Right Shoulder is 6
-        # Left Hip is 11
-        # Right Hip is 12
-    #print(data_samples.pred_instances)
-
     kp = data_samples.pred_instances.keypoints[0]
-
     vis = data_samples.pred_instances.keypoints_visible[0]
 
     # Assume kp, img, masks are defined as before
-    p1, v1 = kp[5], vis[5]  # Left Shoulder
-    nose, nos_vis = kp[0], vis[0]  # Nose
+    nose, nose_vis = kp[0], vis[0]  # Nose
     left_eye, left_eye_vis = kp[1], vis[1]  # Left Eye
     right_eye, right_eye_vis = kp[2], vis[2]  # Right Eye
-    p2, v2 = kp[6], vis[6]  # Right Shoulder
-    p3, v3 = kp[11], vis[11]  # Left Hip
-    p4, v4 = kp[12], vis[12]  # Right Hip
+    left_ear, left_ear_vis = kp[3], vis[3]  # Left Ear
+    right_ear, right_ear_vis = kp[4], vis[4]  # Right Ear
+    left_shoulder, left_shoulder_vis = kp[5], vis[5]  # Left Shoulder
+    right_shoulder, right_shoulder_vis = kp[6], vis[6]  # Right Shoulder
+    left_elbow, left_elbow_vis = kp[7], vis[7]  # Left Elbow
+    right_elbow, right_elbow_vis = kp[8], vis[8]  # Right Elbow
+    left_wrist, left_wrist_vis = kp[9], vis[9]  # Left Wrist
+    right_wrist, right_wrist_vis = kp[10], vis[10]  # Right Wrist
+    left_hip, left_hip_vis = kp[11], vis[11]  # Left Hip
+    right_hip, right_hip_vis = kp[12], vis[12]  # Right Hip
+    left_knee, left_knee_vis = kp[13], vis[13]  # Left Knee
+    right_knee, right_knee_vis = kp[14], vis[14]  # Right Knee
+    left_ankle, left_ankle_vis = kp[15], vis[15]  # Left Ankle
+    right_ankle, right_ankle_vis = kp[16], vis[16]  # Right Ankle
+    
+    # Calculate mean visibility of left and right side
+    left_side_vis = np.mean([left_eye_vis, left_ear_vis, left_shoulder_vis, left_elbow_vis, left_wrist_vis, left_hip_vis, left_knee_vis, left_ankle_vis])
+    right_side_vis = np.mean([right_eye_vis, right_ear_vis, right_shoulder_vis, right_elbow_vis, right_wrist_vis, right_hip_vis, right_knee_vis, right_ankle_vis])
 
-    if v1 <= 0.75 and v3 <= 0.75:
-        view = 'right'
-    elif v2 <= 0.75 and v4 <= 0.75:
+    view_threshold = 0.05
+
+    # Determine view based on visibility
+    if (left_side_vis - right_side_vis) > view_threshold:
         view = 'left'
+    elif (right_side_vis - left_side_vis) > view_threshold:
+        view = 'right'
     else:
         view = 'front'
         
@@ -125,56 +129,57 @@ def process_one_image(args,
 
     x_coords = np.arange(w)
 
-    if view == 'right':
-        y_right, (m_right, b_right) = get_perpendicular_line_through(x_coords, p2, p4)
-        y_top = m_right * x_coords + (p2[1] - m_right * p2[0])
-        y_bottom = m_right * x_coords + (p4[1] - m_right * p4[0])
-        # line between p2 and p4
-        m_vertical = (p4[1] - p2[1]) / (p4[0] - p2[0])
-        b_vertical = p2[1] - m_vertical * p2[0]
-        y_vertical = m_vertical * x_coords + b_vertical
-    elif view == 'left':
-        y_left, (m_left, b_left) = get_perpendicular_line_through(x_coords, p1, p3)
-        y_top = m_left * x_coords + (p1[1] - m_left * p1[0])
-        y_bottom = m_left * x_coords + (p3[1] - m_left * p3[0])
-        # line between p1 and p3
-        m_vertical = (p3[1] - p1[1]) / (p3[0] - p1[0])
-        b_vertical = p1[1] - m_vertical * p1[0]
-        y_vertical = m_vertical * x_coords + b_vertical
-    else:
-        # Get perpendicular lines through p1→p3 and p2→p4
-        y_left, (m_left, b_left) = get_perpendicular_line_through(x_coords, p1, p3)
-        y_right, (m_right, b_right) = get_perpendicular_line_through(x_coords, p2, p4)
-
-        mean_m = (m_left + m_right) / 2
-        mean_top_point = (p1 + p2) / 2
-        mean_bottom_point = (p3 + p4) / 2
-        # line between p1 and p3
-        m_vertical = (p3[1] - p1[1]) / (p3[0] - p1[0])
-        b_vertical = p1[1] - m_vertical * p1[0]
-        y_vertical = m_vertical * x_coords + b_vertical
-        y_top = mean_m * x_coords + (mean_top_point[1] - mean_m * mean_top_point[0])
-        y_bottom = mean_m * x_coords + (mean_bottom_point[1] - mean_m * mean_bottom_point[0])
-
-    # Create a mask for all pixels between the lines
-    Y, X = np.ogrid[:h, :w]
-    between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X]) 
-
-    if view != 'front':
-        # Check if nose point is to the left or right of the vertical line
-        if view == 'left':
-            eye_side = 'right' if int(left_eye[0]) > y_vertical[int(left_eye[0])] else 'left'   
-        elif view == 'right':
-            eye_side = 'right' if int(right_eye[0]) > y_vertical[int(right_eye[0])] else 'left'
-
-        # Select only the part of the mask on the opposite side of the nose respect to the vertical line
-        # So need to filter based on y_vertical
-        if eye_side == 'right':
-            between_mask = between_mask & (Y <= y_vertical[X])
-        else:
-            between_mask = between_mask & (Y >= y_vertical[X])
-
     if masks is not None:
+
+        if view == 'right':
+            # Get perpendicular lines through right_shoulder and right_hip
+            _, (m_right, _) = get_perpendicular_line_through(x_coords, right_shoulder, right_hip)
+            # Get the line at the top of the back
+            y_top = m_right * x_coords + (right_shoulder[1] - m_right * right_shoulder[0])
+            # Get the line at the bottom of the back
+            y_bottom = m_right * x_coords + (right_hip[1] - m_right * right_hip[0])
+            # Get the line between right_shoulder and right_hip
+            m_vertical = (right_hip[1] - right_shoulder[1]) / (right_hip[0] - right_shoulder[0])
+            b_vertical = right_shoulder[1] - m_vertical * right_shoulder[0]
+            y_vertical = m_vertical * x_coords + b_vertical
+        elif view == 'left':
+            _, (m_left, _) = get_perpendicular_line_through(x_coords, left_shoulder, right_shoulder)
+            # Get the line at the top of the back
+            y_top = m_left * x_coords + (left_shoulder[1] - m_left * left_shoulder[0])
+            # Get the line at the bottom of the back
+            y_bottom = m_left * x_coords + (right_shoulder[1] - m_left * right_shoulder[0])
+            # Get the line between left_shoulder and left_hip
+            m_vertical = (left_hip[1] - left_shoulder[1]) / (left_hip[0] - left_shoulder[0])
+            b_vertical = left_shoulder[1] - m_vertical * left_shoulder[0]
+            y_vertical = m_vertical * x_coords + b_vertical
+        else:
+            # Get perpendicular lines through left_shoulder→right_shoulder and right_shoulder→right_hip
+            _, (m_left, _) = get_perpendicular_line_through(x_coords, left_shoulder, right_shoulder)
+            _, (m_right, _) = get_perpendicular_line_through(x_coords, right_shoulder, right_hip)
+            # Get the mean of the two lines
+            mean_m = (m_left + m_right) / 2
+            mean_top_point = (left_shoulder + right_shoulder) / 2
+            mean_bottom_point = (right_shoulder + right_hip) / 2
+            # Get the line at the top of the back
+            y_top = mean_m * x_coords + (mean_top_point[1] - mean_m * mean_top_point[0])
+            # Get the line at the bottom of the back
+            y_bottom = mean_m * x_coords + (mean_bottom_point[1] - mean_m * mean_bottom_point[0])
+            # Get the line between mean_top_point and mean_bottom_point
+            m_vertical = (mean_bottom_point[1] - mean_top_point[1]) / (mean_bottom_point[0] - mean_top_point[0])
+            b_vertical = mean_top_point[1] - m_vertical * mean_top_point[0]
+            y_vertical = m_vertical * x_coords + b_vertical
+
+        # Create a mask for all pixels between the lines
+        Y, X = np.ogrid[:h, :w]
+        # If view is right, keep only the part of the mask between the lines and to the right of the vertical line
+        # If view is left, keep only the part of the mask between the lines and to the left of the vertical line
+        if view == 'right':
+            between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X]) & (Y <= y_vertical[X])
+        elif view == 'left':
+            between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X]) & (Y >= y_vertical[X])
+        else:
+            between_mask = (Y >= y_top[X]) & (Y <= y_bottom[X])
+
         for i in range(masks.shape[0]):
             mask = masks[i]  # shape: (H, W)
             # Keep only the part of the mask between the lines
@@ -190,15 +195,14 @@ def process_one_image(args,
                 # Aprox contour with a polygon of 4 points
                 epsilon = 0.05 * cv2.arcLength(max_contour, True)
                 approx = cv2.approxPolyDP(max_contour, epsilon, True)
+
                 if len(approx) == 4:
-                
                     if view == 'right':
-                        # Find the points corresponding to p2 and p6:
-                        shoulder = np.argmin(np.linalg.norm(approx - p2, axis=2))
-                        hip = np.argmin(np.linalg.norm(approx - p4, axis=2))
+                        shoulder = np.argmin(np.linalg.norm(approx - right_shoulder, axis=2))
+                        hip = np.argmin(np.linalg.norm(approx - right_hip, axis=2))
                     elif view == 'left':
-                        shoulder = np.argmin(np.linalg.norm(approx - p1, axis=2))
-                        hip = np.argmin(np.linalg.norm(approx - p3, axis=2))
+                        shoulder = np.argmin(np.linalg.norm(approx - left_shoulder, axis=2))
+                        hip = np.argmin(np.linalg.norm(approx - right_shoulder, axis=2))
 
                     if view != 'front':
                         other_indices = np.delete(np.arange(4), [shoulder, hip])
@@ -214,15 +218,15 @@ def process_one_image(args,
                         else:
                             back_points = np.concatenate((contour_points[back_top_arg:], contour_points[:back_bottom_arg+1]))
                         # Calculate curvature of back_top and back_bottom
-                        back_curvature = calculate_curvature(back_points)
-                        #print(back_curvature)   
+                        back_curvature = calculate_curvature(back_points)  
                         # Show back curvature as text in img
                         cv2.putText(img, f'Back Curvature: {back_curvature:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                        # Plot back points as points in img
+                        # Select color based on curvature
                         if back_curvature > 5:
                             color = (255, 0, 0)
                         else:
                             color = (0, 255, 0)
+                        # Plot points in img
                         for point in back_points:
                             cv2.circle(img, tuple(point), 2, color, 2)
 
@@ -352,7 +356,7 @@ def main():
         output_file = os.path.join(args.output_root,
                                    os.path.basename(args.input))
         if args.input == 'webcam':
-            output_file += '.mp4'
+            output_file += '.mright_hip'
 
     if args.save_predictions:
         assert args.output_root != ''
@@ -441,7 +445,7 @@ def main():
                 frame_vis = visualizer.get_image()
 
                 if video_writer is None:
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    fourcc = cv2.VideoWriter_fourcc(*'mright_hipv')
                     # the size of the image with visualization may vary
                     # depending on the presence of heatmaps
                     video_writer = cv2.VideoWriter(
