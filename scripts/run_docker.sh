@@ -42,15 +42,9 @@ echo ""
 SETUP_CMD=$(cat <<'EOF'
 set -e
 cd /mmpose
-echo "🔍 Checking if MMPose is installed..."
-if ! python -c "import mmpose" &>/dev/null; then
-    echo "📦 MMPose not found — installing dependencies..."
-    pip install -r requirements.txt
-    pip install -v -e .
-    echo "✅ MMPose installed successfully."
-else
-    echo "✅ MMPose already installed."
-fi
+echo "🔍 Installing MMPose..."
+pip install -r requirements.txt
+pip install -v -e .
 echo ""
 exec bash
 EOF

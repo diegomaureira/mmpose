@@ -153,6 +153,8 @@ def main():
         '--alpha', type=float, default=0.8, help='The transparency of bboxes')
     parser.add_argument(
         '--draw-bbox', action='store_true', help='Draw bboxes of instances')
+    parser.add_argument(
+        '--step', type=int, default=1, help='Frame step size for video input')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
@@ -176,11 +178,15 @@ def main():
         args.pred_save_path = f'{args.output_root}/results_' \
             f'{os.path.splitext(os.path.basename(args.input))[0]}.json'
 
+    build_det_time = time.time()
     # build detector
     detector = init_detector(
         args.det_config, args.det_checkpoint, device=args.device)
     detector.cfg = adapt_mmdet_pipeline(detector.cfg)
+    build_det_time = time.time() - build_det_time
+    print(f'Detector model built in {build_det_time:.3f} seconds.')
 
+    build_pose_time = time.time()
     # build pose estimator
     pose_estimator = init_pose_estimator(
         args.pose_config,
@@ -188,7 +194,10 @@ def main():
         device=args.device,
         cfg_options=dict(
             model=dict(test_cfg=dict(output_heatmaps=args.draw_heatmap))))
+    build_pose_time = time.time() - build_pose_time
+    print(f'Pose estimator model built in {build_pose_time:.3f} seconds.')
 
+    build_visualizer_time = time.time()
     # build visualizer
     pose_estimator.cfg.visualizer.radius = args.radius
     pose_estimator.cfg.visualizer.alpha = args.alpha
@@ -198,7 +207,10 @@ def main():
     # then pass to the model in init_pose_estimator
     visualizer.set_dataset_meta(
         pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
+    build_visualizer_time = time.time() - build_visualizer_time
+    print(f'Visualizer built in {build_visualizer_time:.3f} seconds.')
 
+    infer_time = time.time()
     if args.input == 'webcam':
         input_type = 'webcam'
     else:
@@ -234,6 +246,9 @@ def main():
 
             if not success:
                 break
+            
+            if frame_idx % args.step != 0 and args.step > 1:
+                continue
 
             # topdown pose estimation
             pred_instances = process_one_image(args, frame, detector,
@@ -279,7 +294,10 @@ def main():
         args.save_predictions = False
         raise ValueError(
             f'file {os.path.basename(args.input)} has invalid format.')
-
+    infer_time = time.time() - infer_time
+    print(f'Inference done in {infer_time:.3f} seconds.')
+    
+    save_start_time = time.time()
     if args.save_predictions:
         with open(args.pred_save_path, 'w') as f:
             json.dump(
@@ -289,6 +307,8 @@ def main():
                 f,
                 indent='\t')
         print(f'predictions have been saved at {args.pred_save_path}')
+    save_time = time.time() - save_start_time
+    print(f'Saving predictions done in {save_time:.3f} seconds.')
 
     if output_file:
         input_type = input_type.replace('webcam', 'video')

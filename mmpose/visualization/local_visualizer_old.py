@@ -292,131 +292,74 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                         f'that of keypoints ({len(kpts)})')
 
                 # draw links
-                # if self.skeleton is not None and self.link_color is not None:
-                #     if self.link_color is None or isinstance(
-                #             self.link_color, str):
-                #         link_color = [self.link_color] * len(self.skeleton)
-                #     elif len(self.link_color) == len(self.skeleton):
-                #         link_color = self.link_color
-                #     else:
-                #         raise ValueError(
-                #             f'the length of link_color '
-                #             f'({len(self.link_color)}) does not matches '
-                #             f'that of skeleton ({len(self.skeleton)})')
+                if self.skeleton is not None and self.link_color is not None:
+                    if self.link_color is None or isinstance(
+                            self.link_color, str):
+                        link_color = [self.link_color] * len(self.skeleton)
+                    elif len(self.link_color) == len(self.skeleton):
+                        link_color = self.link_color
+                    else:
+                        raise ValueError(
+                            f'the length of link_color '
+                            f'({len(self.link_color)}) does not matches '
+                            f'that of skeleton ({len(self.skeleton)})')
 
-                #     for sk_id, sk in enumerate(self.skeleton):
-                #         if sk_id < 26:
-                #             # skip body and face parts
-                #             continue
-                #         pos1 = (int(kpts[sk[0], 0]), int(kpts[sk[0], 1]))
-                #         pos2 = (int(kpts[sk[1], 0]), int(kpts[sk[1], 1]))
+                    for sk_id, sk in enumerate(self.skeleton):
+                        pos1 = (int(kpts[sk[0], 0]), int(kpts[sk[0], 1]))
+                        pos2 = (int(kpts[sk[1], 0]), int(kpts[sk[1], 1]))
 
-                #         if (pos1[0] <= 0 or pos1[0] >= img_w or pos1[1] <= 0
-                #                 or pos1[1] >= img_h or pos2[0] <= 0
-                #                 or pos2[0] >= img_w or pos2[1] <= 0
-                #                 or pos2[1] >= img_h or visible[sk[0]] < kpt_thr
-                #                 or visible[sk[1]] < kpt_thr
-                #                 or link_color[sk_id] is None):
-                #             # skip the link that should not be drawn
-                #             continue
+                        if (pos1[0] <= 0 or pos1[0] >= img_w or pos1[1] <= 0
+                                or pos1[1] >= img_h or pos2[0] <= 0
+                                or pos2[0] >= img_w or pos2[1] <= 0
+                                or pos2[1] >= img_h or visible[sk[0]] < kpt_thr
+                                or visible[sk[1]] < kpt_thr
+                                or link_color[sk_id] is None):
+                            # skip the link that should not be drawn
+                            continue
 
-                #         X = np.array((pos1[0], pos2[0]))
-                #         Y = np.array((pos1[1], pos2[1]))
-                #         color = link_color[sk_id]
-                #         if not isinstance(color, str):
-                #             color = tuple(int(c) for c in color)
-                #         transparency = self.alpha
-                #         if self.show_keypoint_weight:
-                #             transparency *= max(
-                #                 0,
-                #                 min(1,
-                #                     0.5 * (visible[sk[0]] + visible[sk[1]])))
+                        X = np.array((pos1[0], pos2[0]))
+                        Y = np.array((pos1[1], pos2[1]))
+                        color = link_color[sk_id]
+                        if not isinstance(color, str):
+                            color = tuple(int(c) for c in color)
+                        transparency = self.alpha
+                        if self.show_keypoint_weight:
+                            transparency *= max(
+                                0,
+                                min(1,
+                                    0.5 * (visible[sk[0]] + visible[sk[1]])))
 
-                #         self.draw_lines(
-                #             X, Y, color, line_widths=self.line_width)
-                
-                left_points = []
-                right_points = []
+                        self.draw_lines(
+                            X, Y, color, line_widths=self.line_width)
+
                 # draw each point on image
                 for kid, kpt in enumerate(kpts):
                     if visible[kid] < kpt_thr or kpt_color[kid] is None:
                         # skip the point that should not be drawn
                         continue
-                    # keep only finger points
-                    if kid < 91:
-                        continue
-                    elif kid >= 91 and kid < 112:
-                        color = (0, 0, 255)
-                        left_points.append(kpt)
-                    elif kid >=112:
-                        color = (255, 0, 0)
-                        right_points.append(kpt)
-            
-                    # color = kpt_color[kid]
-                    # if not isinstance(color, str):
-                    #     color = tuple(int(c) for c in color)
-                    # transparency = self.alpha
-                    # if self.show_keypoint_weight:
-                    #     transparency *= max(0, min(1, visible[kid]))
-                    # self.draw_circles(
-                    #     kpt,
-                    #     radius=np.array([self.radius]),
-                    #     face_colors=color,
-                    #     edge_colors=color,
-                    #     alpha=transparency,
-                    #     line_widths=self.radius)
-                    # if show_kpt_idx:
-                    #     kpt_idx_coords = kpt + [self.radius, -self.radius]
-                    #     self.draw_texts(
-                    #         str(kid),
-                    #         kpt_idx_coords,
-                    #         colors=color,
-                    #         font_sizes=self.radius * 3,
-                    #         vertical_alignments='bottom',
-                    #         horizontal_alignments='center')
-                        
-                # draw bbox around centroid of left and right hand keypoints
-                bbox_size = 100
-                if len(left_points) > 0:
-                    left_centroid = np.mean(np.array(left_points), axis=0)
-                    left_bbox = np.array([
-                        left_centroid[0] - bbox_size / 2,
-                        left_centroid[1] - bbox_size / 2,
-                        left_centroid[0] + bbox_size / 2,
-                        left_centroid[1] + bbox_size / 2
-                    ])
-                    self.draw_bboxes(
-                        left_bbox[np.newaxis, :],
-                        edge_colors=(0, 0, 255),
-                        alpha=self.alpha,
-                        line_widths=self.line_width)
+
+                    color = kpt_color[kid]
+                    if not isinstance(color, str):
+                        color = tuple(int(c) for c in color)
+                    transparency = self.alpha
+                    if self.show_keypoint_weight:
+                        transparency *= max(0, min(1, visible[kid]))
                     self.draw_circles(
-                        left_centroid,
-                        radius=np.array([self.radius * 2]),
-                        face_colors=(0, 0, 255),
-                        edge_colors=(0, 0, 255),
-                        alpha=self.alpha,
-                        line_widths=self.radius * 2)
-                if len(right_points) > 0:
-                    right_centroid = np.mean(np.array(right_points), axis=0)
-                    right_bbox = np.array([
-                        right_centroid[0] - bbox_size / 2,
-                        right_centroid[1] - bbox_size / 2,
-                        right_centroid[0] + bbox_size / 2,
-                        right_centroid[1] + bbox_size / 2
-                    ])
-                    self.draw_bboxes(
-                        right_bbox[np.newaxis, :],
-                        edge_colors=(255, 0, 0),
-                        alpha=self.alpha,
-                        line_widths=self.line_width)
-                    self.draw_circles(
-                        right_centroid,
-                        radius=np.array([self.radius * 2]),
-                        face_colors=(255, 0, 0),
-                        edge_colors=(255, 0, 0),
-                        alpha=self.alpha,
-                        line_widths=self.radius * 2)
+                        kpt,
+                        radius=np.array([self.radius]),
+                        face_colors=color,
+                        edge_colors=color,
+                        alpha=transparency,
+                        line_widths=self.radius)
+                    if show_kpt_idx:
+                        kpt_idx_coords = kpt + [self.radius, -self.radius]
+                        self.draw_texts(
+                            str(kid),
+                            kpt_idx_coords,
+                            colors=color,
+                            font_sizes=self.radius * 3,
+                            vertical_alignments='bottom',
+                            horizontal_alignments='center')
 
         return self.get_image()
 
